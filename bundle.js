@@ -4401,7 +4401,6 @@ function oncode(code) {
 }
 
 function onzoom() {
-  console.log('zooming');
   inner.attr('transform', 'translate(' + d3.event.translate + ')scale(' + d3.event.scale + ')');
 }
 
@@ -5315,7 +5314,6 @@ function init(el) {
     value: ''
   });
 
-  window.xxx = CodeMirror;
   editor.addKeyMap({
     Tab: function Tab(_) {
       return editor.execCommand('insertSoftTab');
