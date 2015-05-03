@@ -45,7 +45,6 @@ function oncode(code) {
 }
 
 function onzoom() {
-  console.log('zooming')
   inner.attr(
     'transform',
     `translate(${d3.event.translate})scale(${d3.event.scale})`
