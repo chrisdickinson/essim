@@ -1,0 +1,31 @@
+{
+  "name": "essim",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "beefy index.js:bundle.js"
+  },
+  "author": "Chris Dickinson <chris@neversaw.us> (http://neversaw.us/)",
+  "license": "MIT",
+  "devDependencies": {
+    "babelify": "^6.0.2",
+    "beefy": "^2.1.5",
+    "browserify": "^9.0.8"
+  },
+  "browserify": {"transform": ["babelify"]},
+  "dependencies": {
+    "codemirror": "^5.2.0",
+    "d3": "^3.5.5",
+    "dagre-d3": "^0.4.3",
+    "debounce": "^1.0.0",
+    "element-size": "^1.1.1",
+    "escontrol": "^4.0.0",
+    "espree": "^2.0.2",
+    "frame-debounce": "^1.0.1",
+    "graphlib-dot": "^0.6.1",
+    "inherits": "^2.0.1",
+    "through": "^2.3.7"
+  }
+}
