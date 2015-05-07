@@ -15,6 +15,63 @@ svg {
   white-space: nowrap;
 }
 
+#play-pause {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  border: none;
+  background: #86c87F;
+  color: white;
+  font-size: 24px;
+  padding: 9px 12px;
+  display: block;
+  width: 100px;
+  height: 36px;
+}
+
+#play-pause:after {
+  content: 'Play';
+  position: absolute;
+  left: 9px;
+  top: 6px;
+}
+
+.playing #play-pause:after {
+  content: 'Stop';
+}
+
+.playing #play-pause {
+  background: #c8867F;
+}
+
+.playing #play-pause:hover {
+  background: #d89694;
+}
+
+#play-pause:hover {
+  background: #96d894;
+}
+
+.disabled #play-pause {
+  background: #86a87F;
+}
+
+.playing #play-pause {
+
+}
+
+#object-graph {
+  display: none;
+}
+
+.playing #flow-graph {
+  display: none;
+}
+
+.playing #object-graph {
+  display: block;
+}
+
 .node rect,
 .node circle,
 .node ellipse {
@@ -30,6 +87,7 @@ svg {
   stroke-width: 1.5px;
 }
 
+.link,
 .edgePath path.path {
   stroke: #333;
   stroke-width: 1.5px;
