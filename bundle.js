@@ -4362,7 +4362,7 @@ function base64DetectIncompleteChar(buffer) {
 },{"buffer":2}],23:[function(require,module,exports){
 'use strict';
 
-var generateCFG = require('./lib/analyzer.js');
+var analyze = require('./lib/analyzer.js');
 var initializeEditor = require('./lib/editor.js');
 var graphlibDot = require('graphlib-dot');
 var d3dagre = require('dagre-d3');
@@ -4371,21 +4371,46 @@ var d3 = require('d3');
 
 initializeEditor(document.body).pipe(through(oncode));
 
-var render = d3dagre.render();
+var renderFlow = d3dagre.render();
+var renderObject = d3dagre.render();
 var svg = d3.select('body').append('svg');
+var playPause = document.createElement('button');
+var playing = false;
+var disabled = false;
+var lastGoodCode = null;
+var objectGraphStream = null;
 
-var inner = svg.attr('width', '50%').attr('height', window.innerHeight).append('g').call(d3.behavior.zoom().scaleExtent([0.125, 1.25]).on('zoom', onzoom)).append('g');
+playPause.setAttribute('id', 'play-pause');
+playPause.textContent = '     ';
+playPause.addEventListener('click', onclickbtn);
+document.body.appendChild(playPause);
+
+var zoomLayer = svg.attr('width', '50%').attr('height', window.innerHeight).append('g').call(d3.behavior.zoom().scaleExtent([0.125, 1.25]).on('zoom', onzoom));
+
+zoomLayer.append('rect').attr('width', '100%').attr('height', '100%').attr('fill', '#666676');
+
+var flowGraph = zoomLayer.append('g').attr('id', 'flow-graph');
+
+var objectGraph = zoomLayer.append('g').attr('id', 'object-graph');
 
 window.onresize = function () {
   svg.attr('height', window.innerHeight);
 };
 
 function oncode(code) {
-  generateCFG(code, function (err, cfg) {
+  if (objectGraphStream) {
+    objectGraphStream.stop();
+    objectGraphStream = null;
+  }
+  analyze.createCFG(code, function (err, cfg) {
     if (err) {
-      console.log(err.stack);
+      document.body.classList.add('play-disabled');
+      disabled = true;
       return;
     }
+    disabled = false;
+    document.body.classList.remove('play-disabled');
+    lastGoodCode = code;
     var results = graphlibDot.read(cfg.toDot());
     if (!results.graph().hasOwnProperty('marginx') && !results.graph().hasOwnProperty('marginy')) {
       results.graph().marginx = 20;
@@ -4396,20 +4421,123 @@ function oncode(code) {
       return selection.transition().duration(500);
     };
 
-    inner.call(render, results);
+    flowGraph.call(renderFlow, results);
   });
 }
 
 function onzoom() {
-  inner.attr('transform', 'translate(' + d3.event.translate + ')scale(' + d3.event.scale + ')');
+  flowGraph.attr('transform', 'translate(' + d3.event.translate + ')scale(' + d3.event.scale + ')');
+  objectGraph.attr('transform', 'translate(' + d3.event.translate + ')scale(' + d3.event.scale + ')');
+}
+
+function onclickbtn(ev) {
+  ev.preventDefault();
+  if (disabled) {
+    return;
+  }
+  playing = !playing;
+  if (!playing) {
+    objectGraph.selectAll('*').remove();
+    document.body.classList.remove('playing');
+    return;
+  } else {
+    document.body.classList.add('playing');
+  }
+
+  objectGraphStream = analyze.createObjectGraph(lastGoodCode);
+  objectGraph.selectAll('*').remove();
+
+  objectGraphStream.on('data', function (_ref) {
+    var vertices = _ref.vertices;
+    var edges = _ref.edges;
+    var builtins = _ref.builtins;
+    var root = _ref.root;
+
+    var output = ['digraph {'];
+    var ID = 1;
+    var mapping = new Map();
+    var _iteratorNormalCompletion = true;
+    var _didIteratorError = false;
+    var _iteratorError = undefined;
+
+    try {
+      for (var _iterator = vertices[Symbol.iterator](), _step; !(_iteratorNormalCompletion = (_step = _iterator.next()).done); _iteratorNormalCompletion = true) {
+        var vertex = _step.value;
+
+        var id = ID++;
+        mapping.set(vertex, id);
+        output.push(id + (' [label=' + JSON.stringify(vertex.stack || vertex.toparent ? 'Stack Item' : vertex.root ? 'Root' : vertex.classInfo ? vertex.classInfo() : vertex.getName ? 'name: ' + vertex.getName() : '???') + ']'));
+      }
+    } catch (err) {
+      _didIteratorError = true;
+      _iteratorError = err;
+    } finally {
+      try {
+        if (!_iteratorNormalCompletion && _iterator['return']) {
+          _iterator['return']();
+        }
+      } finally {
+        if (_didIteratorError) {
+          throw _iteratorError;
+        }
+      }
+    }
+
+    var _iteratorNormalCompletion2 = true;
+    var _didIteratorError2 = false;
+    var _iteratorError2 = undefined;
+
+    try {
+      for (var _iterator2 = edges[Symbol.iterator](), _step2; !(_iteratorNormalCompletion2 = (_step2 = _iterator2.next()).done); _iteratorNormalCompletion2 = true) {
+        var edge = _step2.value;
+
+        if (!mapping.get(edge[0]) || !mapping.get(edge[1])) {
+          continue;
+        }
+
+        output.push('' + mapping.get(edge[0]) + ' -> ' + mapping.get(edge[1]) + ' [label=' + JSON.stringify(edge[2]) + ']');
+      }
+    } catch (err) {
+      _didIteratorError2 = true;
+      _iteratorError2 = err;
+    } finally {
+      try {
+        if (!_iteratorNormalCompletion2 && _iterator2['return']) {
+          _iterator2['return']();
+        }
+      } finally {
+        if (_didIteratorError2) {
+          throw _iteratorError2;
+        }
+      }
+    }
+
+    output.push('}');
+    var results = graphlibDot.read(output.join('\n'));
+    if (!results.graph().hasOwnProperty('marginx') && !results.graph().hasOwnProperty('marginy')) {
+      results.graph().marginx = 20;
+      results.graph().marginy = 20;
+    }
+
+    results.graph().transition = function (selection) {
+      return selection.transition().duration(500);
+    };
+
+    objectGraph.call(renderObject, results);
+  });
 }
 
 },{"./lib/analyzer.js":24,"./lib/editor.js":26,"d3":28,"dagre-d3":29,"graphlib-dot":177,"through":207}],24:[function(require,module,exports){
 'use strict';
 
-module.exports = createCFG;
+var _defineProperty = function _defineProperty(obj, key, value) {
+  return Object.defineProperty(obj, key, { value: value, enumerable: true, configurable: true, writable: true });
+};
+
+module.exports = { createCFG: createCFG, createObjectGraph: createObjectGraph };
 
 var escontrol = require('escontrol');
+var through = require('through');
 var espree = require('espree');
 var d3 = require('d3');
 
@@ -4456,7 +4584,7 @@ function createCFG(code, ready) {
       var times = 0;
       while (cfg.advance()) {
         if (++times > 1000) {
-          return setImmediate(iterate);
+          return setTimeout(iterate);
         }
       }
       return ready(null, cfg);
@@ -4466,9 +4594,328 @@ function createCFG(code, ready) {
   }
 }
 
-function createObjectGraph(code) {}
+function createObjectGraph(code) {
+  var cfg = null;
+  var stream = through();
+  var vertices = new Set();
+  var edges = new Set();
+  var fromVia = new WeakMap();
+  var cancelled = false;
+  var stack = { stack: true };
+  var root = { root: true };
+  var isBuiltin = true;
+  var sawChange = true;
+  var sawGCEvent = false;
 
-},{"d3":28,"escontrol":92,"espree":161}],25:[function(require,module,exports){
+  fromVia.set(root, new Map());
+  fromVia.set(stack, new Map());
+  var builtins = new Set();
+  try {
+    cfg = escontrol(espree.parse(code, parseOpts), {
+      onvalue: onvalue,
+      onpushvalue: onpushvalue,
+      onpopvalue: onpopvalue,
+      onlink: onlink,
+      onunlink: onunlink,
+      oncalled: oncalled
+    });
+  } catch (err) {
+    setTimeout(function (_) {
+      return stream.emit('error', err);
+    });
+  }
+  isBuiltin = false;
+  vertices.add(stack);
+  vertices.add(root);
+
+  setTimeout(iterate);
+
+  stream.stop = stop;
+  cfg.builtins().getprop('[[ArrayProto]]').value().classInfo = function (_) {
+    return '[[ArrayProto]]';
+  };
+  cfg.builtins().getprop('[[ObjectProto]]').value().classInfo = function (_) {
+    return '[[ObjectProto]]';
+  };
+  cfg.builtins().getprop('[[StringProto]]').value().classInfo = function (_) {
+    return '[[StringProto]]';
+  };
+  cfg.builtins().getprop('[[RegExpProto]]').value().classInfo = function (_) {
+    return '[[RegExpProto]]';
+  };
+  cfg.builtins().getprop('[[NumberProto]]').value().classInfo = function (_) {
+    return '[[NumberProto]]';
+  };
+  cfg.builtins().getprop('[[FunctionProto]]').value().classInfo = function (_) {
+    return '[[FunctionProto]]';
+  };
+  cfg.global().classInfo = function (_) {
+    return 'Global Scope';
+  };
+  return stream;
+
+  function iterate() {
+    if (cancelled) {
+      return;
+    }sawChange = false;
+    while (cfg.advance()) {
+      if (sawChange) {
+        if (sawGCEvent) gc(cfg.global());
+        stream.queue({ vertices: vertices, edges: edges });
+        return setTimeout(iterate, 1000);
+      }
+    }
+
+    stream.queue({ vertices: vertices, edges: edges, builtins: builtins });
+    stream.queue(null);
+  }
+
+  function stop() {
+    cancelled = true;
+  }
+
+  function onvalue(value) {
+    sawChange = true;
+    fromVia.set(value, new Map());
+    if (isBuiltin) {
+      builtins.add(value);
+      return;
+    }
+    vertices.add(value);
+    if (value.isEither()) {
+      var _iteratorNormalCompletion = true;
+      var _didIteratorError = false;
+      var _iteratorError = undefined;
+
+      try {
+        for (var _iterator = value._outcomes[Symbol.iterator](), _step; !(_iteratorNormalCompletion = (_step = _iterator.next()).done); _iteratorNormalCompletion = true) {
+          var xs = _step.value;
+
+          onvalue(xs);
+          onlink(value, xs, '[[maybe]]');
+        }
+      } catch (err) {
+        _didIteratorError = true;
+        _iteratorError = err;
+      } finally {
+        try {
+          if (!_iteratorNormalCompletion && _iterator['return']) {
+            _iterator['return']();
+          }
+        } finally {
+          if (_didIteratorError) {
+            throw _iteratorError;
+          }
+        }
+      }
+    }
+  }
+
+  function onpushvalue(value) {
+    sawChange = true;
+    var next = { parent: stack, value: value, toparent: null, tovalue: null };
+    next.toparent = [stack, next, ''];
+    next.tovalue = [next, value, ''];
+    edges.add(next.toparent);
+    edges.add(next.tovalue);
+    vertices.add(next);
+    stack = next;
+  }
+
+  function onpopvalue(value) {
+    sawChange = true;
+    var prev = stack;
+    if (!stack.parent) {
+      throw new Error('cannot pop');
+    }
+    stack = stack.parent;
+    edges['delete'](prev.toparent);
+    edges['delete'](prev.tovalue);
+    vertices['delete'](prev);
+  }
+
+  function onlink(from, to, via) {
+    sawChange = true;
+    from = from || root;
+    to = to || root;
+    if (isBuiltin) {
+      if (from.root || to.root) {
+        vertices.add(from);
+        vertices.add(to);
+      }
+    } else {
+      if (builtins.has(from) || builtins.has(to)) {
+        vertices.add(from);
+        vertices.add(to);
+      }
+    }
+    var tuple = [from, to, via];
+    fromVia.get(from).set(via, tuple);
+    edges.add(tuple);
+  }
+
+  function oncalled() {
+    sawGCEvent = new Error().stack;
+  }
+
+  function onunlink(from, to, via) {
+    sawChange = true;
+    from = from || root;
+    to = to || root;
+    edges['delete'](fromVia.get(from).get(via));
+    fromVia.get(from)['delete'](via);
+  }
+
+  function gc(root) {
+    var trace = sawGCEvent;
+    sawGCEvent = false;
+
+    var seenValues = new Set();
+    var marked = new WeakSet();
+    var _iteratorNormalCompletion2 = true;
+    var _didIteratorError2 = false;
+    var _iteratorError2 = undefined;
+
+    try {
+      for (var _iterator2 = iterateObjects(root, seenValues)[Symbol.iterator](), _step2; !(_iteratorNormalCompletion2 = (_step2 = _iterator2.next()).done); _iteratorNormalCompletion2 = true) {
+        var obj = _step2.value;
+
+        marked.add(obj);
+      }
+    } catch (err) {
+      _didIteratorError2 = true;
+      _iteratorError2 = err;
+    } finally {
+      try {
+        if (!_iteratorNormalCompletion2 && _iterator2['return']) {
+          _iterator2['return']();
+        }
+      } finally {
+        if (_didIteratorError2) {
+          throw _iteratorError2;
+        }
+      }
+    }
+
+    var currentStack = stack;
+    while (currentStack) {
+      if (currentStack.value && currentStack.value.names) {
+        var _seenValues = new Set();
+        var _iteratorNormalCompletion3 = true;
+        var _didIteratorError3 = false;
+        var _iteratorError3 = undefined;
+
+        try {
+          for (var _iterator3 = iterateObjects(currentStack.value, _seenValues)[Symbol.iterator](), _step3; !(_iteratorNormalCompletion3 = (_step3 = _iterator3.next()).done); _iteratorNormalCompletion3 = true) {
+            var obj = _step3.value;
+
+            marked.add(obj);
+          }
+        } catch (err) {
+          _didIteratorError3 = true;
+          _iteratorError3 = err;
+        } finally {
+          try {
+            if (!_iteratorNormalCompletion3 && _iterator3['return']) {
+              _iterator3['return']();
+            }
+          } finally {
+            if (_didIteratorError3) {
+              throw _iteratorError3;
+            }
+          }
+        }
+      }
+      currentStack = currentStack.parent;
+    }
+    marked.add(root);
+    var _iteratorNormalCompletion4 = true;
+    var _didIteratorError4 = false;
+    var _iteratorError4 = undefined;
+
+    try {
+      for (var _iterator4 = vertices[Symbol.iterator](), _step4; !(_iteratorNormalCompletion4 = (_step4 = _iterator4.next()).done); _iteratorNormalCompletion4 = true) {
+        var obj = _step4.value;
+
+        if (!marked.has(obj) && !obj.stack && !obj.toparent) {
+          console.log('DELETE obj', obj, cfg.stackInfo(), trace);
+          vertices['delete'](obj);
+        }
+      }
+    } catch (err) {
+      _didIteratorError4 = true;
+      _iteratorError4 = err;
+    } finally {
+      try {
+        if (!_iteratorNormalCompletion4 && _iterator4['return']) {
+          _iterator4['return']();
+        }
+      } finally {
+        if (_didIteratorError4) {
+          throw _iteratorError4;
+        }
+      }
+    }
+  }
+
+  function iterateObjects(obj, seenValues) {
+    var _ref;
+
+    var stack = [obj.names()];
+    seenValues.add(null);
+    return (_ref = {}, _ref[Symbol.iterator] = function () {
+      return this;
+    }, _defineProperty(_ref, 'next', function next() {
+      var _iteratorNormalCompletion5 = true;
+      var _didIteratorError5 = false;
+      var _iteratorError5 = undefined;
+
+      try {
+        for (var _iterator5 = stack[0][Symbol.iterator](), _step5; !(_iteratorNormalCompletion5 = (_step5 = _iterator5.next()).done); _iteratorNormalCompletion5 = true) {
+          var _name = _step5.value;
+
+          var value = _name;
+          if (_name.value) {
+            value = _name.value();
+          }
+          if (seenValues.has(value)) {
+            continue;
+          }
+          seenValues.add(value);
+          stack.unshift(value.isEither() ? value._outcomes.values() : value.names());
+          return {
+            value: value,
+            done: false
+          };
+        }
+      } catch (err) {
+        _didIteratorError5 = true;
+        _iteratorError5 = err;
+      } finally {
+        try {
+          if (!_iteratorNormalCompletion5 && _iterator5['return']) {
+            _iterator5['return']();
+          }
+        } finally {
+          if (_didIteratorError5) {
+            throw _iteratorError5;
+          }
+        }
+      }
+
+      stack.shift();
+      if (!stack.length) {
+        return {
+          done: true,
+          value: undefined
+        };
+      }
+      return this.next();
+    }), _ref);
+  }
+}
+
+},{"d3":28,"escontrol":92,"espree":161,"through":207}],25:[function(require,module,exports){
 "use strict";
 
 module.exports = function (CodeMirror) {
@@ -27722,20 +28169,20 @@ var ObjectValue = require('./lib/values/object.js')
 var Unknown = require('./lib/values/unknown.js')
 var Value = require('./lib/values/value.js')
 
-function makeBuiltins() {
-  var root = new ObjectValue(null, hidden.initial.SCOPE, null)
+function makeBuiltins(cfg) {
+  var root = new ObjectValue(cfg, hidden.initial.SCOPE, null)
 
-  var objectProto = new ObjectValue(root, hidden.initial.EMPTY, null)
-  var arrayProto = new ObjectValue(root, hidden.initial.EMPTY, objectProto)
-  var regexpProto = new ObjectValue(root, hidden.initial.EMPTY, objectProto)
-  var dateProto = new ObjectValue(root, hidden.initial.EMPTY, objectProto)
-  var functionProto = new ObjectValue(root, hidden.initial.EMPTY, objectProto)
-  var stringProto = new ObjectValue(root, hidden.initial.EMPTY, objectProto)
-  var numberProto = new ObjectValue(root, hidden.initial.EMPTY, objectProto)
-  var booleanProto = new ObjectValue(root, hidden.initial.EMPTY, objectProto)
-  var argumentsProto = new ObjectValue(root, hidden.initial.EMPTY, objectProto)
-  var errorProto = new ObjectValue(root, hidden.initial.EMPTY, objectProto)
-  var symbolProto = new ObjectValue(root, hidden.initial.EMPTY, objectProto)
+  var objectProto = new ObjectValue(cfg, hidden.initial.EMPTY, null)
+  var arrayProto = new ObjectValue(cfg, hidden.initial.EMPTY, objectProto)
+  var regexpProto = new ObjectValue(cfg, hidden.initial.EMPTY, objectProto)
+  var dateProto = new ObjectValue(cfg, hidden.initial.EMPTY, objectProto)
+  var functionProto = new ObjectValue(cfg, hidden.initial.EMPTY, objectProto)
+  var stringProto = new ObjectValue(cfg, hidden.initial.EMPTY, objectProto)
+  var numberProto = new ObjectValue(cfg, hidden.initial.EMPTY, objectProto)
+  var booleanProto = new ObjectValue(cfg, hidden.initial.EMPTY, objectProto)
+  var argumentsProto = new ObjectValue(cfg, hidden.initial.EMPTY, objectProto)
+  var errorProto = new ObjectValue(cfg, hidden.initial.EMPTY, objectProto)
+  var symbolProto = new ObjectValue(cfg, hidden.initial.EMPTY, objectProto)
 
   root.newprop('[[ObjectProto]]').assign(objectProto)
   root.newprop('[[ArrayProto]]').assign(arrayProto)
@@ -27914,9 +28361,11 @@ var hidden = require('./lib/values/hidden-class.js')
 var ObjectValue = require('./lib/values/object.js')
 var createValueStack = require('./value-stack.js')
 var createScopeStack = require('./scope-stack.js')
+var Membrane = require('./lib/values/membrane.js')
 var createCallStack = require('./call-stack.js')
 var Unknown = require('./lib/values/unknown.js')
 var makeRuntime = require('./runtime/index.js')
+var makeNull = require('./lib/values/null.js')
 var Scope = require('./lib/values/scope.js')
 var Value = require('./lib/values/value.js')
 var makeBuiltins = require('./builtins.js')
@@ -27938,17 +28387,22 @@ function CFGFactory(node, opts) {
   this.oncalled = opts.oncalled || noop
   this.onoperation = opts.onoperation || noop
   this.onfunction = opts.onfunction || noop
+  this.onpushvalue = opts.onpushvalue || noop
+  this.onpopvalue = opts.onpopvalue || noop
+  this.onvalue = opts.onvalue || noop
+  this.onlink = opts.onlink || noop
+  this.onunlink = opts.onunlink || noop
   this.onload = opts.onload || noop
   this._visit = opts.onvisit ? this._listenvisit : this._basevisit
   this._stack = []
   this._graphs = []
   this._lastNode = null
-  this._builtins = opts.builtins || makeBuiltins()
-  this._global = new Name('[[Global]]')
-  this._global.assign(opts.global || new Scope(this._builtins, null, 'Program'))
-  this._valueStack = createValueStack(this._builtins, opts.onvalue, opts.onpopvalue)
-  if (!opts.global) makeRuntime(this._builtins, this._global.value())
-  this._scopeStack = createScopeStack(this._global.value(), this._builtins)
+  this._builtins = opts.builtins || makeBuiltins(this)
+  this._global = new Name('[[Global]]', null, this)
+  this._global.assign(opts.global || this.makeScope('Program', null))
+  this._valueStack = createValueStack(this)
+  if (!opts.global) makeRuntime(this, this._global.value())
+  this._scopeStack = createScopeStack(this, this._global.value())
   this._callStack = createCallStack()
   this._connectionKind = []
   this._edges = []
@@ -27995,6 +28449,14 @@ proto.stackInfo = function() {
   }).join('/')
 }
 
+proto.setBreakpoint = function() {
+  this._stack[this._stack.length - 1].isBreakpoint = true
+}
+
+proto.unsetBreakpoint = function() {
+  this._stack[this._stack.length - 1].isBreakpoint = false
+}
+
 proto.getExceptionDestination = function() {
   var frame = this._callStack.current()
   while (frame) {
@@ -28017,6 +28479,9 @@ proto.getExceptionDestination = function() {
 proto.advance = function cfg_next() {
   Operation.id = this.operationId
   if (this._stack.length) {
+    if (this._stack[this._stack.length - 1].isBreakpoint) {
+      return null
+    }
     var frame = this._stack.pop()
     frame.fn.call(this, frame.context)
     this.operationId = Operation.id
@@ -28352,7 +28817,7 @@ proto.toDot = function() {
 
 proto.makeObject = function(hci, proto) {
   return new ObjectValue(
-    this._builtins,
+    this,
     hci || hidden.initial.EMPTY,
     typeof proto === 'string' ? this._builtins.getprop(proto).value() :
     typeof proto === 'object' ? proto :
@@ -28360,33 +28825,61 @@ proto.makeObject = function(hci, proto) {
   )
 }
 
-proto.makeFunction = function(callFn, instantiateFn, prototype) {
-  var sfi = new SharedFunctionInfo({type: 'BlockStatement', body: []})
+proto.makeArray = function(size) {
+  var arr = this._builtins.getprop('[[ArrayConstructor]]').value().makeNew()
+  arr.newprop('length').assign(this.makeValue('number', size))
+  return arr
+}
+
+proto.makeFunction = function(callFn, instantiateFn, prototype, node, scope) {
+  node = node || {type: 'FunctionExpression', phony: true, body: {type: 'BlockStatement', body: []}, params: []}
+  var sfi = this._getSharedFunctionInfo(node)
   var value = new FunctionValue(
-    this._builtins,
-    {},
+    this,
+    node || {},
     prototype || this.makeObject(),
-    callFn.name ? callFn.name : instantiateFn ? instantiateFn.name : '<anon>',
-    this.global(),
+    node && node.id && node.id.name ? node.id.name :
+    callFn && callFn.name ? callFn.name :
+    instantiateFn && instantiateFn.name ? instantiateFn.name : '<anon>',
+    scope || this.global(),
     sfi,
     null,
-    true
+    null
   )
-  value.call = callFn
-  value.instantiateFn = instantiateFn || callFn
+  if (callFn) value.call = callFn
+  if (instantiateFn || callFn) value.instantiateFn = instantiateFn || callFn
   return value
 }
 
 proto.makeValue = function(kind, value) {
-  return new Value(this._builtins, kind, value)
+  return new Value(this, kind, value)
 }
 
 proto.makeUnknown = function() {
-  return new Unknown(this._builtins)
+  return new Unknown(this)
 }
 
 proto.makeUndefined = function() {
-  return makeUndefined()
+  return makeUndefined(this)
+}
+
+proto.makeNull = function() {
+  return makeNull(this)
+}
+
+proto.makeRegExp = function(src, flags) {
+  return this.makeObject(
+    hidden.initial.REGEXP,
+    this._builtins.getprop('[[RegExpProto]]').value()
+  )
+}
+
+proto.makeScope = function(name, parent) {
+  return new Scope(this, parent, name)
+}
+
+proto.makeMembrane = function(parent) {
+  return new Membrane(this, parent)
 }
 
 function Frame(fn, context, isLValue, isCallee, block) {
@@ -28395,6 +28888,7 @@ function Frame(fn, context, isLValue, isCallee, block) {
   this.isCallee = isCallee
   this.context = context
   this.isLValue = isLValue
+  this.isBreakpoint = false
 }
 
 require('./lib/visit-expr-array.js')(proto)
@@ -28434,12 +28928,11 @@ function noop() {
 
 }
 
-},{"./builtins.js":89,"./call-stack.js":90,"./graphviz.js":91,"./lib/values/function.js":97,"./lib/values/hidden-class.js":98,"./lib/values/name.js":101,"./lib/values/object.js":103,"./lib/values/scope.js":104,"./lib/values/shared-function-info.js":105,"./lib/values/undefined.js":106,"./lib/values/unknown.js":107,"./lib/values/value.js":109,"./lib/visit-expr-array.js":110,"./lib/visit-expr-assignment.js":111,"./lib/visit-expr-binary.js":112,"./lib/visit-expr-call.js":113,"./lib/visit-expr-conditional.js":114,"./lib/visit-expr-function.js":115,"./lib/visit-expr-identifier.js":116,"./lib/visit-expr-literal.js":117,"./lib/visit-expr-logical.js":118,"./lib/visit-expr-member.js":119,"./lib/visit-expr-new.js":120,"./lib/visit-expr-object.js":121,"./lib/visit-expr-sequence.js":122,"./lib/visit-expr-this.js":123,"./lib/visit-expr-tpl-literal.js":124,"./lib/visit-expr-unary.js":125,"./lib/visit-expr-update.js":126,"./lib/visit-stmt-block.js":127,"./lib/visit-stmt-break.js":128,"./lib/visit-stmt-continue.js":129,"./lib/visit-stmt-do-while.js":130,"./lib/visit-stmt-expr.js":131,"./lib/visit-stmt-for-in.js":132,"./lib/visit-stmt-for.js":133,"./lib/visit-stmt-if.js":134,"./lib/visit-stmt-program.js":135,"./lib/visit-stmt-return.js":136,"./lib/visit-stmt-switch.js":137,"./lib/visit-stmt-throw.js":138,"./lib/visit-stmt-try.js":139,"./lib/visit-stmt-var-declaration.js":140,"./lib/visit-stmt-while.js":141,"./operation.js":145,"./runtime/index.js":151,"./scope-stack.js":158,"./simplify.js":159,"./value-stack.js":160}],93:[function(require,module,exports){
+},{"./builtins.js":89,"./call-stack.js":90,"./graphviz.js":91,"./lib/values/function.js":97,"./lib/values/hidden-class.js":98,"./lib/values/membrane.js":99,"./lib/values/name.js":101,"./lib/values/null.js":102,"./lib/values/object.js":103,"./lib/values/scope.js":104,"./lib/values/shared-function-info.js":105,"./lib/values/undefined.js":106,"./lib/values/unknown.js":107,"./lib/values/value.js":109,"./lib/visit-expr-array.js":110,"./lib/visit-expr-assignment.js":111,"./lib/visit-expr-binary.js":112,"./lib/visit-expr-call.js":113,"./lib/visit-expr-conditional.js":114,"./lib/visit-expr-function.js":115,"./lib/visit-expr-identifier.js":116,"./lib/visit-expr-literal.js":117,"./lib/visit-expr-logical.js":118,"./lib/visit-expr-member.js":119,"./lib/visit-expr-new.js":120,"./lib/visit-expr-object.js":121,"./lib/visit-expr-sequence.js":122,"./lib/visit-expr-this.js":123,"./lib/visit-expr-tpl-literal.js":124,"./lib/visit-expr-unary.js":125,"./lib/visit-expr-update.js":126,"./lib/visit-stmt-block.js":127,"./lib/visit-stmt-break.js":128,"./lib/visit-stmt-continue.js":129,"./lib/visit-stmt-do-while.js":130,"./lib/visit-stmt-expr.js":131,"./lib/visit-stmt-for-in.js":132,"./lib/visit-stmt-for.js":133,"./lib/visit-stmt-if.js":134,"./lib/visit-stmt-program.js":135,"./lib/visit-stmt-return.js":136,"./lib/visit-stmt-switch.js":137,"./lib/visit-stmt-throw.js":138,"./lib/visit-stmt-try.js":139,"./lib/visit-stmt-var-declaration.js":140,"./lib/visit-stmt-while.js":141,"./operation.js":145,"./runtime/index.js":151,"./scope-stack.js":158,"./simplify.js":159,"./value-stack.js":160}],93:[function(require,module,exports){
 module.exports = combine
 
 var Operation = require('../operation.js')
 var Either = require('./values/either.js')
-var Value = require('./values/value.js')
 
 combine.operationMap = {
   '+': Operation.kind.ADD,
@@ -28470,17 +28963,17 @@ combine.operationMap = {
   '||': Operation.kind.LOR
 }
 
-function combine(builtins, lhs, rhs, op, onoperation) {
-  var result = _combine(builtins, lhs, rhs, op)
-  onoperation([lhs, rhs], op, result)
+function combine(cfg, lhs, rhs, op) {
+  var result = _combine(cfg, lhs, rhs, op)
+  cfg.onoperation([lhs, rhs], op, result)
   return result
 }
 
-function _combine(builtins, lhs, rhs, op) {
+function _combine(cfg, lhs, rhs, op) {
   // TODO: make it actually statically apply the values.
   switch (op) {
     case '+':
-      return new Value(builtins, lhs.isString() || rhs.isString() ? 'string' : 'number')
+      return cfg.makeValue(lhs.isString() || rhs.isString() ? 'string' : 'number')
 
     case '-':
     case '++':
@@ -28495,7 +28988,7 @@ function _combine(builtins, lhs, rhs, op) {
     case '<<':
     case '>>':
     case '>>>':
-      return new Value(builtins, 'number')
+      return cfg.makeValue('number')
 
     case '==':
     case '!=':
@@ -28508,15 +29001,15 @@ function _combine(builtins, lhs, rhs, op) {
     case 'in':
     case 'delete':
     case 'instanceof':
-      return new Value(builtins, 'boolean')
+      return cfg.makeValue('boolean')
     case '&&':
     case '||':
-      return Either.of(lhs, rhs)
+      return Either.of(cfg, lhs, rhs)
   }
 }
 
 
-},{"../operation.js":145,"./values/either.js":96,"./values/value.js":109}],94:[function(require,module,exports){
+},{"../operation.js":145,"./values/either.js":96}],94:[function(require,module,exports){
 'use strict'
 
 module.exports = unwrapAll
@@ -28537,13 +29030,39 @@ function unwrapAll(wrap) {
 },{}],95:[function(require,module,exports){
 'use strict'
 module.exports = BaseValue
-function BaseValue(builtins) {
-  this._builtins = builtins
-  this._references = new Set()
+
+const unwrap = require('../unwrap-all.js')
+
+const toRefs = new WeakMap()
+const toCFG = new WeakMap()
+
+function BaseValue(cfg) {
+  toCFG.set(this, cfg)
+  toRefs.set(this, new Set())
   this._marks = null
+  if (cfg) {
+    cfg.onvalue(this)
+  }
 }
 
 var proto = BaseValue.prototype
+
+Object.defineProperty(proto, 'cfg', {
+  get: function() {
+    return toCFG.get(this)
+  },
+  enumerable: false
+})
+
+Object.defineProperty(proto, '_references', {
+  get: function() {
+    return toRefs.get(this)
+  },
+  enumerable: false
+})
+
+proto.names = function*() {
+}
 
 proto.isEither = function() {
   return false
@@ -28558,7 +29077,7 @@ proto.newprop = function BaseValue_newprop() {
 }
 
 proto.delprop = function BaseValue_delprop() {
-  throw new Error('not implemented')
+  // throw new Error('not implemented')
 }
 
 proto.copy = function BaseValue_copy() {
@@ -28579,10 +29098,16 @@ proto.toObject = function() {
 
 proto.addRef = function(name) {
   this._references.add(name)
+  if (this.cfg) {
+    this.cfg.onlink(unwrap(name.source), unwrap(this), name.getName())
+  }
 }
 
 proto.removeRef = function(name) {
   this._references.delete(name)
+  if (this.cfg) {
+    this.cfg.onunlink(unwrap(name.source), unwrap(this), name.getName())
+  }
 }
 
 proto.getHCID = function() {
@@ -28609,17 +29134,14 @@ proto.isValue = function() {
   return false
 }
 
-},{}],96:[function(require,module,exports){
+},{"../unwrap-all.js":94}],96:[function(require,module,exports){
 'use strict'
 
 module.exports = Either
 
 var inherits = require('inherits')
 
-var makeUndefined = require('./undefined.js')
 var unwrapAll = require('../unwrap-all.js')
-var Undefined = require('./undefined.js')
-var Unknown = require('./unknown.js')
 var BaseValue = require('./base.js')
 var Name = require('./name.js')
 
@@ -28631,18 +29153,21 @@ var ArrayFrom = Array.from || function(iterable) {
   return out
 }
 
-function Either(itemSet) {
-  BaseValue.call(this, null)
+function Either(cfg, itemSet) {
   this._outcomes = itemSet
+
+  // XXX: call BaseValue last because 
+  // having _outcomes set up is ++important
+  BaseValue.call(this, cfg)
 }
 
 inherits(Either, BaseValue)
 
-Either.of = function(/* args */) {
-  return Either.from([].slice.call(arguments))
+Either.of = function(cfg/*,  args */) {
+  return Either.from(cfg, [].slice.call(arguments, 1))
 }
 
-Either.from = function(arr) {
+Either.from = function(cfg, arr) {
   var set = new Set(arr.filter(Boolean))
   if (set.size === 1) {
     return set.values().next().value
@@ -28667,7 +29192,7 @@ Either.from = function(arr) {
       master._outcomes.add(item)
     }
   } else {
-    master = new Either(set)
+    master = new Either(cfg, set)
   }
 
   // make sure outcomes cannot contain master
@@ -28732,7 +29257,7 @@ proto.classInfo = function() {
 }
 
 proto.copy = function() {
-  return new Either(new Set(ArrayFrom(this._outcomes, function(xs) {
+  return new Either(this.cfg, new Set(ArrayFrom(this._outcomes, function(xs) {
     return xs.copy()
   })))
 }
@@ -28773,7 +29298,7 @@ proto.getprop = function Either_getprop(prop, immediate) {
 }
 
 proto.newprop = function Either_newprop(prop, name) {
-  name = name || new Name(prop)
+  name = name || new Name(prop, this, this.cfg)
   for (let outcome of this._outcomes) {
     if (!outcome.isUndefined() && !outcome.isNull()) {
       outcome.newprop(prop, name)
@@ -28786,7 +29311,9 @@ proto.newprop = function Either_newprop(prop, name) {
 
 proto.delprop = function Either_delprop(prop) {
   for (var item of this._outcomes) {
-    item.delprop(prop)
+    if (!item.isUndefined() && !item.isNull()) {
+      item.delprop(prop)
+    }
   }
 }
 
@@ -28844,7 +29371,7 @@ proto.call = function(cfg, thisValue, args, isNew) {
     if (next.done) {
       cfg._popBlock()
       cfg._setLastNode(block.exit)
-      return cfg._valueStack.push(Either.from(values))
+      return cfg._valueStack.push(Either.from(cfg, values))
     }
 
     next = next.value
@@ -28927,6 +29454,13 @@ function EitherName(from, propName, canThrow, immediate) {
 
 var proto = EitherName.prototype
 
+Object.defineProperty(proto, 'source', {
+  get() {
+    return this._from
+  },
+  enumerable: false
+})
+
 proto.getName = function() {
   return this._propName
 }
@@ -28969,10 +29503,10 @@ proto.value = function() {
   if (!out.length) {
     return null
   }
-  return Either.from(out)
+  return Either.from(this._from.cfg, out)
 }
 
-},{"../unwrap-all.js":94,"./base.js":95,"./name.js":101,"./undefined.js":106,"./unknown.js":107,"inherits":143}],97:[function(require,module,exports){
+},{"../unwrap-all.js":94,"./base.js":95,"./name.js":101,"inherits":143}],97:[function(require,module,exports){
 'use strict'
 
 module.exports = FunctionValue
@@ -28980,27 +29514,33 @@ module.exports = FunctionValue
 var inherits = require('inherits')
 
 var hidden = require('./hidden-class.js')
-var Undefined = require('./undefined.js')
 var ObjectValue = require('./object.js')
 var Either = require('./either.js')
-var Value = require('./value.js')
 var Name = require('./name.js')
 
-function FunctionValue(builtins, code, prototype, name, context, shared, childHCID, isStrict) {
-
+function FunctionValue(cfg,
+                       code,
+                       prototype,
+                       name,
+                       context,
+                       shared,
+                       childHCID,
+                       isStrict,
+                       parentMap) {
   var fnProto
 
   ObjectValue.call(
     this,
-    builtins,
+    cfg,
     hidden.initial.FUNCTION,
-    builtins ? (fnProto = builtins.getprop('[[FunctionProto]]')) ? fnProto.value() : null : null
+    cfg ? (fnProto = cfg._builtins.getprop('[[FunctionProto]]')) ? fnProto.value() : null : null,
+    parentMap
   )
   this._code = code
 
-  name = name || '(anonymous ' + (FunctionValue.anonymousIds++) + ')' 
+  name = name || '(anonymous ' + (FunctionValue.anonymousIds++) + ')'
   this._name = name
-  this._context = new Name('[[Scope]]') 
+  this._context = new Name('[[Scope]]', this, cfg)
   this._context.assign(context)
   this._childHCID = childHCID || null
   this._isStrict = isStrict || (
@@ -29038,19 +29578,16 @@ proto.sharedFunctionInfo = function() {
 
 proto.copy = function FunctionValue_copy() {
   var copy = new FunctionValue(
-    this._builtins,
+    this.cfg,
     this._code,
     this.getprop('prototype').value(),
     this._name,
     this._context.value(),
     this._sharedFunctionInfo,
     this._childHCID,
-    this._isStrict
+    this._isStrict,
+    this._attributes
   )
-
-  for (var key in this._attributes) {
-    copy._attributes[key] = this._attributes[key]
-  }
 
   if (copy.call !== this.call) {
     copy.call = this.call
@@ -29071,11 +29608,11 @@ proto.call = function FunctionValue_call(cfg, thisValue, args, isNew, shouldBran
   var branchID
 
   var Arguments = new ObjectValue(
-    this._builtins,
+    cfg,
     hidden.initial.ARGUMENTS,
-    this._builtins.getprop('[[ArgumentsProto]]').value()
+    this.cfg._builtins.getprop('[[ArgumentsProto]]').value()
   )
-  Arguments.newprop('length').assign(new Value(this._builtins, 'number', args.length))
+  Arguments.newprop('length').assign(cfg.makeValue('number', args.length))
 
   cfg._callStack.pushFrame(this, thisValue, Arguments, isNew, cfg._currentBlock())
   cfg._pushBlock(this._code, true, null)
@@ -29089,12 +29626,12 @@ proto.call = function FunctionValue_call(cfg, thisValue, args, isNew, shouldBran
 
   for(var i = 0, len = this._code.params.length; i < len; ++i) {
     var name = cfg._scopeStack.newprop(this._code.params[i].name)
-    name.assign(args[i] || Undefined())
+    name.assign(args[i] || cfg.makeUndefined())
 
     if (this._isStrict) {
       Arguments.newprop(i).assign(name.value())
     } else {
-      Arguments._attributes[i] = name
+      Arguments._attributes.set(i, name)
     }
   }
 
@@ -29146,9 +29683,9 @@ function CFG_afterCall(context) {
   if (values.length === 1) {
     this._valueStack.push(values[0])
   } else if(values.length > 1) {
-    this._valueStack.push(Either.from(values))
+    this._valueStack.push(Either.from(this, values))
   } else {
-    this._valueStack.push(Undefined())
+    this._valueStack.push(this.makeUndefined())
   }
 
   context.fn._sharedFunctionInfo.recordReturn(context.callId, this._valueStack.current())
@@ -29156,7 +29693,7 @@ function CFG_afterCall(context) {
 
 proto.makeNew = function FunctionValue_makeNew() {
   var prototype = this.getprop('prototype').value()
-  return new ObjectValue(this._builtins, this._childHCID, prototype)
+  return this.cfg.makeObject(this._childHCID, prototype)
 }
 
 proto.instantiate = function FunctionValue_instantiate(cfg, args) {
@@ -29185,7 +29722,7 @@ proto.isFunction = function() {
   return true
 }
 
-},{"./either.js":96,"./hidden-class.js":98,"./name.js":101,"./object.js":103,"./undefined.js":106,"./value.js":109,"inherits":143}],98:[function(require,module,exports){
+},{"./either.js":96,"./hidden-class.js":98,"./name.js":101,"./object.js":103,"inherits":143}],98:[function(require,module,exports){
 module.exports = {
   advance: advance,
   get: get,
@@ -29231,15 +29768,15 @@ var hiddenClasses = [
 function HiddenClass(strName, prev) {
   this._name = strName || null
   this._prev = prev || null
-  this._edges = {__proto__: null}
+  this._edges = new Map()
 }
 
 HiddenClass.prototype.advance = function(prop, hci) {
-  var next = this._edges[prop]
+  var next = this._edges.get(prop)
 
   if (next === undefined) {
     next = hiddenClasses.push(new HiddenClass(prop, hci)) - 1
-    this._edges[prop] = next
+    this._edges.set(prop, next)
   }
 
   return next
@@ -29256,7 +29793,7 @@ HiddenClass.prototype.toName = function() {
 
   var name = attrs.shift()
 
-  return name + ':{' + attrs.join(', ') + '}'
+  return name + (attrs.length ? (':{' + attrs.join(', ') + '}') : '')
 }
 
 function reserve(name) {
@@ -29286,9 +29823,9 @@ var Name = require('./name.js')
 
 var inherits = require('inherits')
 
-function Membrane(parentScope) {
-  BaseValue.call(this, null)
-  var parentRef = new Name('[[ParentScope]]')
+function Membrane(cfg, parentScope) {
+  BaseValue.call(this, cfg)
+  var parentRef = new Name('[[ParentScope]]', this, cfg)
   parentRef.assign(parentScope)
   this._parentScope = parentRef
   this._names = new Map()
@@ -29310,7 +29847,7 @@ proto.getprop = function(prop, immediate) {
   }
   var name = parent.getprop(prop, immediate)
   if (name) {
-    wrapped = new WrappedName(name, this._wraps)
+    wrapped = new WrappedName(this.cfg, name, this._wraps)
   }
   return wrapped
 }
@@ -29360,13 +29897,30 @@ module.exports = WrappedName
 var WrappedValue = require('./value-wrapped.js')
 var Either = require('./either.js')
 
-function WrappedName(name, branchValues) {
+const toCFG = new WeakMap()
+
+function WrappedName(cfg, name, branchValues) {
   this._wrapped = name
   this._value = null
   this.branchValues = branchValues
+  toCFG.set(this, cfg)
 }
 
 var proto = WrappedName.prototype
+
+Object.defineProperty(proto, 'cfg', {
+  get() {
+    return toCFG.get(this)
+  },
+  enumerable: false
+})
+
+Object.defineProperty(proto, 'source', {
+  get() {
+    return this._wrapped.source
+  },
+  enumerable: false
+})
 
 proto.setCurrentSourceObject = function(current) {
   this._wrapped.setCurrentSourceObject(current)
@@ -29389,7 +29943,7 @@ proto.assign = function(value) {
     name = name._wrapped
   }
 
-  name.assign(Either.of(this._wrapped.value(), value))
+  name.assign(Either.of(this.cfg, this._wrapped.value(), value))
   this._value = value
 }
 
@@ -29407,11 +29961,7 @@ proto.value = function() {
     return null
   }
 
-  return new WrappedValue(val, this.branchValues)
-
-  var out = this._value || new WrappedValue(this._wrapped.value(), this.branchValues)
-
-  return out
+  return new WrappedValue(this.cfg, val, this.branchValues)
 }
 
 },{"./either.js":96,"./value-wrapped.js":108}],101:[function(require,module,exports){
@@ -29419,7 +29969,12 @@ proto.value = function() {
 
 module.exports = Name
 
-function Name(str) {
+const toCFG = new WeakMap
+const toSource = new WeakMap
+
+function Name(str, source, cfg) {
+  toCFG.set(this, cfg)
+  toSource.set(this, source)
   this._name = str
   this._currentSource = null
   this._value = null
@@ -29427,6 +29982,20 @@ function Name(str) {
 }
 
 var proto = Name.prototype
+
+Object.defineProperty(proto, 'cfg', {
+  get() {
+    return toCFG.get(this)
+  },
+  enumerable: false
+})
+
+Object.defineProperty(proto, 'source', {
+  get() {
+    return toSource.get(this)
+  },
+  enumerable: false
+})
 
 proto.setCurrentSourceObject = function(current) {
   this._currentSource = current
@@ -29464,12 +30033,18 @@ var hidden = require('./hidden-class.js')
 var BaseValue = require('./base.js')
 var inherits = require('inherits')
 
-function getNull() {
-  return getNull.value = getNull.value || new Null
+const perCFG = new WeakMap()
+
+function getNull(cfg) {
+  if (!perCFG.has(cfg)) {
+    perCFG.set(cfg, new Null(cfg))
+  }
+  return perCFG.get(cfg)
 }
 
-function Null() {
-  BaseValue.call(this, null)
+
+function Null(cfg) {
+  BaseValue.call(this, cfg)
   this._hcid = hidden.initial.NULL
 }
 
@@ -29477,7 +30052,7 @@ inherits(Null, BaseValue)
 var proto = Null.prototype
 
 proto.classInfo = function() {
-  return 'undefined'
+  return 'null'
 }
 
 proto.copy = function() {
@@ -29501,18 +30076,17 @@ var inherits = require('inherits')
 
 var hidden = require('./hidden-class.js')
 var BaseValue = require('./base.js')
-var Value = require('./value.js')
 var Name = require('./name.js')
 
-function ObjectValue(builtins, hcid, proto) {
-  BaseValue.call(this, builtins)
+function ObjectValue(cfg, hcid, proto, parentMap) {
+  BaseValue.call(this, cfg)
 
   this._hcid = hcid
 
-  var protoName = new Name('[[Proto]]')
+  var protoName = new Name('[[Proto]]', this, cfg)
   protoName.assign(proto)
   this._protoRef = protoName
-  this._attributes = {__proto__: null}
+  this._attributes = parentMap ? new Map(parentMap.entries()) : new Map()
 }
 
 inherits(ObjectValue, BaseValue)
@@ -29528,6 +30102,12 @@ Object.defineProperty(proto, '_prototype', {
     return this._protoRef.value()
   }
 })
+
+proto.names = function*() {
+  for(const tuple of this._attributes) {
+    yield tuple[1]
+  }
+}
 
 proto.isString = function() {
   var name = this.getprop('toString')
@@ -29547,9 +30127,12 @@ proto.newprop = function ObjectValue_newprop(prop, name) {
     return this._protoRef
   }
 
-  var hadProp = prop in this._attributes
-
-  var name = this._attributes[prop] = name || new Name(String(prop))
+  prop = String(prop)
+  var hadProp = this._attributes.has(prop)
+  if (!name) {
+    name = new Name(prop, this, this.cfg)
+  }
+  this._attributes.set(prop, name)
 
   if (!hadProp)
   switch(this._hcid) {
@@ -29572,8 +30155,9 @@ proto.getprop = function ObjectValue_getprop(name, immediate) {
     return this._protoRef
   }
 
-  if (this._attributes[name]) {
-    return this._attributes[name]
+  name = String(name)
+  if (this._attributes.has(name)) {
+    return this._attributes.get(name)
   }
 
   if (!immediate && this._prototype && !this._prototype.isNull()) {
@@ -29589,26 +30173,26 @@ proto.getprop = function ObjectValue_getprop(name, immediate) {
   return null
 }
 
-proto.delprop = function ObjectValue_delprop(name) {
-  if (!this._attributes[prop]) {
+proto.delprop = function ObjectValue_delprop(prop) {
+  prop = String(prop)
+  if (!this._attributes.has(prop)) {
     return
   }
 
-  this._attributes[prop].value()
-    .removeRef(this._attributes[prop])
+  if (!this._attributes.get(prop).value()) {
+    this._attributes.delete(prop)
+    return
+  }
 
-  delete this._attributes[prop]
+  this._attributes.get(prop).value()
+    .removeRef(this._attributes.get(prop))
+
+  this._attributes.delete(prop)
   this._hcid = hidden.initial.EXPANDO
 }
 
 proto.copy = function ObjectValue_copy() {
-  var copy = new ObjectValue(this._builtins, this._hcid, this._prototype)
-
-  for (var key in this._attributes) {
-    copy._attributes[key] = this._attributes[key]
-  }
-
-  return copy
+  return new ObjectValue(this.cfg, this._hcid, this._prototype, this._attributes)
 }
 
 proto._toValue = function ObjectValue_toValue() {
@@ -29622,14 +30206,14 @@ proto._toValue = function ObjectValue_toValue() {
   // TODO: how to coerce Unknown?
   if (!valueOf) {
     if (!toString) {
-      return new Value(this._builtins, 'string')
+      return this.cfg.makeValue('string')
       throw new Error('cannot coerce')
     }
 
-    return new Value(this._builtins, 'string')
+    return this.cfg.makeValue('string')
   }
 
-  return new Value(this._builtins, 'string')
+  return this.cfg.makeValue('string')
 }
 
 proto.toValue = function() {
@@ -29638,7 +30222,7 @@ proto.toValue = function() {
   return val
 }
 
-},{"./base.js":95,"./hidden-class.js":98,"./name.js":101,"./value.js":109,"inherits":143}],104:[function(require,module,exports){
+},{"./base.js":95,"./hidden-class.js":98,"./name.js":101,"inherits":143}],104:[function(require,module,exports){
 'use strict'
 
 module.exports = Scope
@@ -29647,8 +30231,8 @@ var hidden = require('./hidden-class.js')
 var ObjectValue = require('./object.js')
 var inherits = require('inherits')
 
-function Scope(builtins, lastScope, type) {
-  ObjectValue.call(this, builtins, hidden.initial.SCOPE, lastScope)
+function Scope(cfg, lastScope, type) {
+  ObjectValue.call(this, cfg, hidden.initial.SCOPE, lastScope)
   this._blockType = type
 }
 
@@ -29657,7 +30241,7 @@ inherits(Scope, ObjectValue)
 var proto = Scope.prototype
 
 proto.copy = function() {
-  return new Scope(this._builtins, this._prototype, this._blockType)
+  return new Scope(this.cfg, this._prototype, this._blockType)
 }
 
 proto.getprop = function(prop, immediate) {
@@ -29734,6 +30318,7 @@ proto.signature = function() {
       slots[j][record._hcids[j]] = true
     }
 
+    if (record._return)
     for(var j = 0; j < record._return.length; ++j) {
       ret[record._return[j]] = true
     }
@@ -29824,12 +30409,17 @@ var hidden = require('./hidden-class.js')
 var BaseValue = require('./base.js')
 var inherits = require('inherits')
 
-function getUndefined() {
-  return getUndefined.value = getUndefined.value || new Undefined
+const perCFG = new WeakMap()
+
+function getUndefined(cfg) {
+  if (!perCFG.has(cfg)) {
+    perCFG.set(cfg, new Undefined(cfg))
+  }
+  return perCFG.get(cfg)
 }
 
-function Undefined() {
-  BaseValue.call(this, null)
+function Undefined(cfg) {
+  BaseValue.call(this, cfg)
   this._hcid = hidden.initial.UNDEFINED
 }
 
@@ -29861,8 +30451,8 @@ var hidden = require('./hidden-class.js')
 var ObjectValue = require('./object.js')
 var inherits = require('inherits')
 
-function Unknown(builtins) {
-  ObjectValue.call(this, builtins, hidden.initial.UNKNOWN, null)
+function Unknown(cfg, parentMap) {
+  ObjectValue.call(this, cfg, hidden.initial.UNKNOWN, null, parentMap)
   this._assumeDefined = false
   this._assumeFunction = false
 }
@@ -29877,7 +30467,7 @@ proto.getprop = function Unknown_getprop(prop, immediate) {
   // alright whatever, really
   if (!name) {
     name = this.newprop(prop)
-    name.assign(new Unknown(this._builtins))
+    name.assign(new Unknown(this.cfg))
     return name
   }
 
@@ -29885,13 +30475,10 @@ proto.getprop = function Unknown_getprop(prop, immediate) {
 }
 
 proto.copy = function Unknown_copy() {
-  var copy = new Unknown(this._builtins)
+  var copy = new Unknown(this.cfg, this._attributes)
   copy._assumeDefined = this._assumeDefined
   copy._assumeFunction = this._assumeFunction
   copy._hcid = this._hcid
-  for (var key in this._attributes) {
-    copy._attributes[key] = this._attributes[key]
-  }
 
   return copy
 }
@@ -29934,9 +30521,14 @@ var BaseValue = require('./base.js')
 var Either = require('./either.js')
 var Name = require('./name.js')
 
-function WrappedValue(obj, branchValues) {
+// Keep WrappedValues separately from BaseValues –
+// we don't want any automatic tracking of them.
+const toCFG = new WeakMap()
+
+function WrappedValue(cfg, obj, branchValues) {
   BaseValue.call(this, null)
 
+  toCFG.set(this, cfg)
   branchValues.add(this)
   this._wrapped = obj
   this.branchValues = branchValues
@@ -29947,6 +30539,13 @@ function WrappedValue(obj, branchValues) {
 inherits(WrappedValue, BaseValue)
 
 var proto = WrappedValue.prototype
+
+Object.defineProperty(proto, 'cfg', {
+  get() {
+    return toCFG.get(this)
+  },
+  enumerable: false
+})
 
 Object.defineProperty(proto, '_prototype', {
   get: function() {
@@ -29966,7 +30565,7 @@ function _copyOnWrite(wrap) {
     refs.add(xs)
   }
   var copy = wrap._wrapped.copy()
-  var val = Either.of(wrap._wrapped, copy)
+  var val = Either.of(wrap.cfg, wrap._wrapped, copy)
 
   val._marks = wrap._marks
   copy._marks = wrap._marks
@@ -29984,7 +30583,7 @@ function _copyOnWrite(wrap) {
 }
 
 proto.copy = function WrappedValue_copy() {
-  var copied = new WrappedValue(this._wrapped, this.branchValues)
+  var copied = new WrappedValue(this.cfg, this._wrapped, this.branchValues)
   
   for(var tuple in this._wrappedNames) {
     copied._wrappedNames.set(tuple[0], tuple[1])
@@ -30004,7 +30603,7 @@ proto.getprop = function WrappedValue_getprop(prop) {
   name = this._wrapped.getprop(prop)
 
   if (name) {
-    wname = new WrappedName(name, this.branchValues)
+    wname = new WrappedName(this.cfg, name, this.branchValues)
     this._wrappedNames.set(prop, wname)
   }
   return wname
@@ -30091,12 +30690,11 @@ module.exports = Value
 var inherits = require('inherits')
 
 var hidden = require('./hidden-class.js')
-var ObjectValue = require('./object.js')
 var BaseValue = require('./base.js')
 
-function Value(builtins, type, value) {
-  BaseValue.call(this, builtins)
-  this._coerceTo = builtins.getprop({
+function Value(cfg, type, value) {
+  BaseValue.call(this, cfg)
+  this._coerceTo = cfg._builtins.getprop({
     'boolean': '[[BooleanProto]]',
     'string': '[[StringProto]]',
     'number': '[[NumberProto]]',
@@ -30142,14 +30740,14 @@ proto.copy = function Value_copy() {
 }
 
 proto.toObject = function Value_toObject() {
-  return new ObjectValue(this._builtins, this._hcid, this._coerceTo)
+  return this.cfg.makeObject(this._hcid, this._coerceTo)
 }
 
 proto.isString = function() {
   return this._type === 'string'
 }
 
-},{"./base.js":95,"./hidden-class.js":98,"./object.js":103,"inherits":143}],110:[function(require,module,exports){
+},{"./base.js":95,"./hidden-class.js":98,"inherits":143}],110:[function(require,module,exports){
 'use strict'
 
 module.exports = install
@@ -30240,7 +30838,7 @@ function visitedRight(node) {
   if (!lhs.value()) {
     lhs.assign(this.makeUndefined())
   }
-  var newValue = combine(this._builtins, lhs.value().toValue(), rhs.toValue(), node.operator.slice(0, -1), this.onoperation)
+  var newValue = combine(this, lhs.value().toValue(), rhs.toValue(), node.operator.slice(0, -1))
 
   lhs.assign(newValue)
   this._valueStack.push(rhs)
@@ -30290,13 +30888,12 @@ function visitedRight(node) {
   // TODO: add check for "isUnknown | isEither",
   // if true, then create a Predicate value
   // otherwise... do what's here.
-  this._valueStack.push(combine(this._builtins, lhs, rhs, node.operator, this.onoperation))
+  this._valueStack.push(combine(this, lhs, rhs, node.operator))
 }
 
 },{"../operation.js":145,"./combine-values.js":93}],113:[function(require,module,exports){
 'use strict'
 
-var Unknown = require('./values/unknown.js')
 var Operation = require('../operation.js')
 var unwrap = require('./unwrap-all.js')
 
@@ -30414,7 +31011,7 @@ function oncalled(context) {
   this.oncalled(unwrap(context.callee), context.context, context.args.map(unwrap), context.recurses, this._valueStack.current())
 }
 
-},{"../operation.js":145,"./unwrap-all.js":94,"./values/unknown.js":107}],114:[function(require,module,exports){
+},{"../operation.js":145,"./unwrap-all.js":94}],114:[function(require,module,exports){
 'use strict'
 
 module.exports = install
@@ -30468,7 +31065,7 @@ function visitedAlternate(context) {
   var ifTrue = this._valueStack.pop()
 
   this._valueStack.push(
-    Either.of(ifTrue, ifFalse)
+    Either.of(this, ifTrue, ifFalse)
   )
 }
 
@@ -30477,9 +31074,6 @@ function visitedAlternate(context) {
 
 module.exports = install
 
-var FunctionValue = require('./values/function.js')
-var hidden = require('./values/hidden-class.js')
-var ObjectValue = require('./values/object.js')
 var Operation = require('../operation.js')
 
 function install(proto) {
@@ -30487,27 +31081,7 @@ function install(proto) {
 }
 
 function visitFunctionExpression(node) {
-  var fnValue
-  var fnProto
-  var shared
-
-  shared = this._getSharedFunctionInfo(node)
-  fnProto = new ObjectValue(
-      this._builtins,
-      hidden.initial.EMPTY,
-      this._builtins.getprop('[[ObjectProto]]').value()
-  )
-  fnValue = new FunctionValue(
-      this._builtins,
-      node,
-      fnProto,
-      node.id ? node.id.name : null,
-      this._scopeStack.current(),
-      shared,
-      null,
-      null
-  )
-
+  var fnValue = this.makeFunction(null, null, null, node, this._scopeStack.current())
   this._connect(this.last(), new Operation(Operation.kind.CREATE_FUNCTION, null, null, null))
   this._valueStack.push(fnValue)
   this.onfunction(fnValue, node)
@@ -30515,13 +31089,11 @@ function visitFunctionExpression(node) {
   return fnValue
 }
 
-},{"../operation.js":145,"./values/function.js":97,"./values/hidden-class.js":98,"./values/object.js":103}],116:[function(require,module,exports){
+},{"../operation.js":145}],116:[function(require,module,exports){
 'use strict'
 
 module.exports = install
 
-var Undefined = require('./values/undefined.js')
-var Unknown = require('./values/unknown.js')
 var Operation = require('../operation.js')
 var unwrap = require('./unwrap-all.js')
 
@@ -30579,7 +31151,7 @@ function visitIdentifier(node) {
   // if the value has been declared but not
   // assigned yet, it's undefined.
   if (value === null) {
-    value = Undefined()
+    value = this.makeUndefined()
     name.assign(value)
   }
 
@@ -30595,17 +31167,13 @@ function visitIdentifier(node) {
   }
 }
 
-},{"../operation.js":145,"./unwrap-all.js":94,"./values/undefined.js":106,"./values/unknown.js":107}],117:[function(require,module,exports){
+},{"../operation.js":145,"./unwrap-all.js":94}],117:[function(require,module,exports){
 'use strict'
 
 module.exports = install
 
 var hidden = require('./values/hidden-class.js')
-var Undefined = require('./values/undefined.js')
-var ObjectValue = require('./values/object.js')
 var Operation = require('../operation.js')
-var Value = require('./values/value.js')
-var Null = require('./values/null.js')
 
 function install(proto) {
   proto.visitLiteral = visitLiteral
@@ -30615,17 +31183,13 @@ function visitLiteral(node) {
   var value
 
   if (node.value instanceof RegExp) {
-    value = new ObjectValue(
-      this._builtins,
-      hidden.initial.REGEXP,
-      this._builtins.getprop('[[RegExpProto]]').value()
-    )
+    value = this.makeRegExp(node.value, node.flags)
   } else if (node.value === null) {
-    value = Null()
+    value = this.makeNull()
   } else if (node.value === undefined) {
-    value = Undefined()
+    value = this.makeUndefined()
   } else {
-    value = new Value(this._builtins, typeof node.value, node.value)
+    value = this.makeValue(typeof node.value, node.value)
   }
 
   this._valueStack.push(value)
@@ -30637,7 +31201,7 @@ function visitLiteral(node) {
   ))
 }
 
-},{"../operation.js":145,"./values/hidden-class.js":98,"./values/null.js":102,"./values/object.js":103,"./values/undefined.js":106,"./values/value.js":109}],118:[function(require,module,exports){
+},{"../operation.js":145,"./values/hidden-class.js":98}],118:[function(require,module,exports){
 'use strict'
 
 module.exports = install
@@ -30678,7 +31242,7 @@ function visitedRHS(branchID) {
   var rhs = this._valueStack.pop()
   var lhs = this._valueStack.pop()
   this._valueStack.push(
-    Either.of(lhs, rhs)
+    Either.of(this, lhs, rhs)
   )
 }
 
@@ -30687,12 +31251,9 @@ function visitedRHS(branchID) {
 
 module.exports = install
 
-var Undefined = require('./values/undefined.js')
-var Unknown = require('./values/unknown.js')
 var Operation = require('../operation.js')
-var Name = require('./values/name.js')
-var Null = require('./values/null.js')
 var unwrap = require('./unwrap-all.js')
+var Name = require('./values/name.js')
 
 function install(proto) {
   proto.visitMemberExpression = visitMemberExpression
@@ -30715,9 +31276,10 @@ function visitedObjectLValue(node) {
     } else if (obj.isUndefined() || obj.isNull()) {
       this._throwException('TypeError')
       if (!obj.isEither()) {
-        name = new Name('??? unreachable (' + node.name + ')')
+        var sourceObject = this.makeUnknown()
+        name = new Name('??? unreachable (' + node.name + ')', sourceObject, this)
         name.assign(this.makeUnknown())
-        name.setCurrentSourceObject(this.makeUnknown())
+        name.setCurrentSourceObject(sourceObject)
       }
     }
 
@@ -30740,7 +31302,7 @@ function visitedPropertyLValue(node) {
   var prop = this._valueStack.pop()
 
   // TODO: lookup static values; make this make sense
-  var name = new Name('???')
+  var name = new Name('???', obj, this)
   name.assign(this.makeUnknown())
   name.setCurrentSourceObject(obj)
   this._valueStack.push(name)
@@ -30758,7 +31320,7 @@ function visitedObject(node) {
       this._throwException('TypeError')
 
       // all bets are off, now
-      obj = new Unknown(this._builtins)
+      obj = this.makeUnknown()
     }
 
     var val = obj.getprop(node.property.name, false)
@@ -30768,11 +31330,11 @@ function visitedObject(node) {
       this._throwException('TypeError')
     }
 
-    val = val ? val.value() : new Unknown(this._builtins)
+    val = val ? val.value() : this.makeUnknown()
 
     // XXX: fixme, this is a hack
     if (!val) {
-      val = new Unknown(this._builtins)
+      val = this.makeUnknown()
     }
 
     this._valueStack.push(val)
@@ -30796,14 +31358,12 @@ function visitedProperty(node) {
     this._throwException('TypeError')
   }
 
-  this._valueStack.push(new Unknown(this._builtins))
+  this._valueStack.push(this.makeUnknown())
 }
 
-},{"../operation.js":145,"./unwrap-all.js":94,"./values/name.js":101,"./values/null.js":102,"./values/undefined.js":106,"./values/unknown.js":107}],120:[function(require,module,exports){
+},{"../operation.js":145,"./unwrap-all.js":94,"./values/name.js":101}],120:[function(require,module,exports){
 'use strict'
 
-var ObjectValue = require('./values/object.js')
-var Unknown = require('./values/unknown.js')
 var Operation = require('../operation.js')
 
 module.exports = install
@@ -30832,7 +31392,7 @@ function visitedCallee(context) {
     value = name.value()
 
     if (value === null) {
-      name.assign(new Unknown(this._builtins))
+      name.assign(this.makeUnknown())
       value = name.value()
     }
   } else {
@@ -30886,13 +31446,13 @@ function visitedArguments(context) {
       !recurses) {
     context.callee.instantiate(this, args)
   } else {
-    var val = new Unknown(this._builtins)
+    var val = this.makeUnknown()
     val.assumeDefined()
     this._valueStack.push(val)
   }
 }
 
-},{"../operation.js":145,"./values/object.js":103,"./values/unknown.js":107}],121:[function(require,module,exports){
+},{"../operation.js":145}],121:[function(require,module,exports){
 'use strict'
 
 module.exports = install
@@ -30980,7 +31540,6 @@ function visitThisExpression() {
 },{"../operation.js":145}],124:[function(require,module,exports){
 'use strict'
 
-var Unknown = require('./values/unknown.js')
 var Operation = require('../operation.js')
 var unwrap = require('./unwrap-all.js')
 
@@ -31154,15 +31713,12 @@ function oncalled(context) {
   this.oncalled(unwrap(context.callee), context.context, context.args.map(unwrap), context.recurses, this._valueStack.current())
 }
 
-},{"../operation.js":145,"./unwrap-all.js":94,"./values/unknown.js":107}],125:[function(require,module,exports){
+},{"../operation.js":145,"./unwrap-all.js":94}],125:[function(require,module,exports){
 'use strict'
 
 module.exports = install
 
-var Undefined = require('./values/undefined.js')
-var Unknown = require('./values/unknown.js')
 var Operation = require('../operation.js')
-var Value = require('./values/value.js')
 
 combine.operationMap = {
   '!': Operation.kind.NOT,
@@ -31179,62 +31735,60 @@ function install(proto) {
 }
 
 function visitUnaryExpression(node) {
-  this._pushFrame(visitedArgument, node)
+  if (node.operator === 'delete') {
+    this._pushFrame(visitedDeleteArgument, node, false, true)
+  } else {
+    this._pushFrame(visitedArgument, node)
+  }
   this._visit(node.argument)
 }
 
-function visitedArgument(node) {
+function visitedDeleteArgument(node) {
+  var lhsName = this._valueStack.pop()
+  var target = lhsName.getCurrentSourceObject()
+  if (target) {
+    target.delprop(lhsName.getName())
+  }
+  this._connect(this.last(), new Operation(combine.operationMap[node.operator], null, null, null))
+  this._valueStack.push(this.makeValue('boolean'))
+}
 
+function visitedArgument(node) {
   this._connect(this.last(), new Operation(combine.operationMap[node.operator], null, null, null))
   var lhs = this._valueStack.pop()
 
-  // TODO: handle delete
-  // TODO: if value is unknown, then make this a predicate
-  this._valueStack.push(combine(this._builtins, lhs.toValue(), node.operator, this.onoperation))
+  this._valueStack.push(combine(this, lhs.toValue(), node.operator))
 }
 
-function combine(builtins, value, op, onoperation) {
-  var result = _combine(builtins, value, op)
-  onoperation([value], op, result)
+function combine(cfg, value, op) {
+  var result = _combine(cfg, value, op)
+  cfg.onoperation([value], op, result)
   return result
 }
 
-function _combine(builtins, value, op) {
-  // TODO: apply operation
+function _combine(cfg, value, op) {
   switch(op) {
     case '!':
-      return new Value(builtins, 'boolean')
+      return cfg.makeValue('boolean')
     case '-':
     case '+':
     case '~':
-      return new Value(builtins, 'number')
+      return cfg.makeValue('number')
     case 'void':
-      return new Undefined()
+      return cfg.makeUndefined()
     case 'typeof':
-      return new Value(builtins, 'string')
+      return cfg.makeValue('string')
   }
 
-  return new Unknown(builtins)
+  return cfg.makeUnknown()
 }
 
-function applyOperation(value, op) {
-  switch(op) {
-    case 'typeof': return typeof value
-    case '!': return !value
-    case '-': return -value
-    case '+': return +value
-    case '~': return ~value
-    case 'void': return
-  }
-}
-
-},{"../operation.js":145,"./values/undefined.js":106,"./values/unknown.js":107,"./values/value.js":109}],126:[function(require,module,exports){
+},{"../operation.js":145}],126:[function(require,module,exports){
 'use strict'
 
 module.exports = install
 
 var Operation = require('../operation.js')
-var Value = require('./values/value.js')
 
 function install(proto) {
   proto.visitUpdateExpression = visitUpdateExpression
@@ -31262,19 +31816,14 @@ function visitedArgument(node) {
   }
 
   oldValue = oldValue.toValue()
-  // TODO: predicates!
-  var newValue = new Value(
-    this._builtins,
-    'number',
-    node.operator === '++' ? +oldValue._value + 1 : oldValue._value - 1
-  )
+  var newValue = this.makeValue('number')
 
   name.assign(newValue)
 
   this._valueStack.push(node.prefix ? newValue : oldValue)
 }
 
-},{"../operation.js":145,"./values/value.js":109}],127:[function(require,module,exports){
+},{"../operation.js":145}],127:[function(require,module,exports){
 'use strict'
 
 module.exports = install
@@ -31453,7 +32002,6 @@ function afterExpression(node) {
 module.exports = install
 
 var Operation = require('../operation.js')
-var Value = require('./values/value.js')
 
 function install(proto) {
   proto.visitForInStatement = visitForInStatement
@@ -31503,7 +32051,7 @@ function visitedRight(node) {
     lhs = this._scopeStack.newprop(attemptedName, 'imaginary')
   }
 
-  var val = new Value(this._builtins, 'string')
+  var val = this.makeValue('string')
   lhs.assign(val)
   this._setIfTrue()
   this._pushFrame(visitedBody, {
@@ -31520,7 +32068,7 @@ function visitedBody(context) {
   this._setLastNode(this._popBlock().exit)
 }
 
-},{"../operation.js":145,"./values/value.js":109}],133:[function(require,module,exports){
+},{"../operation.js":145}],133:[function(require,module,exports){
 'use strict'
 
 var Operation = require('../operation.js')
@@ -31867,6 +32415,7 @@ function iterateCaseBody(context) {
 
     context.casesPendingBodies.length = 0
     context.enterBodyIdx = null
+    this._setLastNode(last)
   }
 
   if (context.current.consequent.length === context.bodyIndex) {
@@ -33278,7 +33827,8 @@ var SharedFunctionInfo = require('../lib/values/shared-function-info.js')
 var hidden = require('../lib/values/hidden-class.js')
 var ObjectValue = require('../lib/values/object.js')
 
-function makeArray(builtins, globals, quickFn) {
+function makeArray(cfg, globals, quickFn) {
+  var builtins = cfg._builtins
   var arrayProto = builtins.getprop('[[ArrayProto]]').value()
   var arrayCons = quickFn('Array', ArrayImpl, globals, hidden.initial.ARRAY)
 
@@ -33592,8 +34142,8 @@ var SharedFunctionInfo = require('../lib/values/shared-function-info.js')
 var hidden = require('../lib/values/hidden-class.js')
 var ObjectValue = require('../lib/values/object.js')
 
-function makeBoolean(builtins, globals, quickFn) {
-  var booleanProto = builtins.getprop('[[BooleanProto]]').value()
+function makeBoolean(cfg, globals, quickFn) {
+  var booleanProto = cfg._builtins.getprop('[[BooleanProto]]').value()
   var booleanCons = quickFn('Boolean', BooleanImpl, globals, hidden.initial.BOOLEAN)
 
   booleanCons.getprop('prototype').assign(booleanProto)
@@ -33616,8 +34166,8 @@ var SharedFunctionInfo = require('../lib/values/shared-function-info.js')
 var hidden = require('../lib/values/hidden-class.js')
 var ObjectValue = require('../lib/values/object.js')
 
-function makeDate(builtins, globals, quickFn) {
-  var dateProto = builtins.getprop('[[DateProto]]').value()
+function makeDate(cfg, globals, quickFn) {
+  var dateProto = cfg._builtins.getprop('[[DateProto]]').value()
   var dateCons = quickFn('Date', DateImpl, globals, hidden.initial.DATE)
 
   dateCons.getprop('prototype').assign(dateProto)
@@ -33636,8 +34186,8 @@ var hidden = require('../lib/values/hidden-class.js')
 var ObjectValue = require('../lib/values/object.js')
 var Value = require('../lib/values/value.js')
 
-function makeErrors(builtins, globals, quickFn) {
-  var errorProto = builtins.getprop('[[ErrorProto]]').value()
+function makeErrors(cfg, globals, quickFn) {
+  var errorProto = cfg._builtins.getprop('[[ErrorProto]]').value()
   var errorCons = quickFn('Error', ErrorImpl, globals)
   errorCons.getprop('prototype').assign(errorProto)
 
@@ -33652,15 +34202,15 @@ function makeErrors(builtins, globals, quickFn) {
 
   subclasses.forEach(function(name) {
     var cons = quickFn(name, ErrorImpl, globals)
-    var obj = new ObjectValue(builtins, hidden.initial.EMPTY, errorProto)
+    var obj = new ObjectValue(cfg, hidden.initial.EMPTY, errorProto)
     cons.getprop('prototype').assign(obj)
-    builtins.newprop('[[' + name + ']]').assign(cons)
+    cfg._builtins.newprop('[[' + name + ']]').assign(cons)
   })
 }
 
 function ErrorImpl(cfg, thisValue, args, isNew) {
   // FIXME: this is made out of lies
-  cfg._valueStack.push(new Value(cfg._builtins, 'string'))
+  cfg._valueStack.push(cfg.makeValue('string'))
 }
 
 
@@ -33668,14 +34218,8 @@ function ErrorImpl(cfg, thisValue, args, isNew) {
 module.exports = makeFunction
 module.exports.callImpl = CallFunctionImpl
 
-var SharedFunctionInfo = require('../lib/values/shared-function-info.js')
-var FunctionValue = require('../lib/values/function.js')
-var hidden = require('../lib/values/hidden-class.js')
-var ObjectValue = require('../lib/values/object.js')
-var Unknown = require('../lib/values/unknown.js')
-
-function makeFunction(builtins, globals, quickFn) {
-  var functionProto = builtins.getprop('[[FunctionProto]]').value()
+function makeFunction(cfg, globals, quickFn) {
+  var functionProto = cfg._builtins.getprop('[[FunctionProto]]').value()
   var functionCons = quickFn('Function', FunctionImpl, globals)
 
   functionCons.getprop('prototype').assign(functionProto)
@@ -33709,7 +34253,7 @@ function CallFunctionImpl(cfg, thisValue, args, isNew, shouldBranch) {
   if (!realFunction.isUnknown() && realFunction.isFunction() && !recurses) {
     realFunction.call(cfg, realThis, args, false, shouldBranch)
   } else {
-    cfg._valueStack.push(new Unknown(cfg._builtins))
+    cfg._valueStack.push(cfg.makeUnknown())
   }
 }
 
@@ -33755,29 +34299,17 @@ function ApplyFunctionImpl(cfg, thisValue, args, isNew, shouldBranch) {
     }
     realFunction.call(cfg, realThis, newArgs, false, shouldBranch)
   } else {
-    cfg._valueStack.push(new Unknown(cfg._builtins))
+    cfg._valueStack.push(cfg.makeUnknown())
   }
 }
 
 function FunctionImpl(cfg, thisValue, args, isNew) {
-  var ast = {"type":"FunctionDeclaration","id":{"type":"Identifier","name":"toString"},"params":[],"defaults":[],"body":{"type":"BlockStatement","body":[{"type":"ReturnStatement","argument":null}]},"rest":null,"generator":false,"expression":false}
-
-  var sfi = new SharedFunctionInfo(ast)
   cfg._valueStack.push(
-    new FunctionValue(
-      cfg._builtins,
-      ast,
-      cfg._builtins.getprop('[[FunctionProto]]').value(),
-      '(dynamic function)',
-      new ObjectValue(cfg._builtins, hidden.initial.EXPANDO, null),
-      sfi,
-      null,
-      true
-    )
+    cfg.makeFunction(null, null, null)
   )
 }
 
-},{"../lib/values/function.js":97,"../lib/values/hidden-class.js":98,"../lib/values/object.js":103,"../lib/values/shared-function-info.js":105,"../lib/values/unknown.js":107}],151:[function(require,module,exports){
+},{}],151:[function(require,module,exports){
 module.exports = makeRuntime
 
 var FunctionValue = require('../lib/values/function.js')
@@ -33799,19 +34331,20 @@ var builtinArray = require('./array.js')
 var builtinMath = require('./math.js')
 var builtinDate = require('./date.js')
 
-function makeRuntime(builtins, globals) {
-  var functionProto = builtins.getprop('[[FunctionProto]]').value()
+function makeRuntime(cfg, globals) {
+  var functionProto = cfg._builtins.getprop('[[FunctionProto]]').value()
+  var builtins = cfg._builtins
 
-  builtinFunction(builtins, globals, quickfn)
-  builtinBoolean(builtins, globals, quickfn)
-  builtinObject(builtins, globals, quickfn)
-  builtinNumber(builtins, globals, quickfn)
-  builtinRegExp(builtins, globals, quickfn)
-  builtinString(builtins, globals, quickfn)
-  builtinSymbol(builtins, globals, quickfn)
-  builtinError(builtins, globals, quickfn)
-  builtinArray(builtins, globals, quickfn)
-  builtinMath(builtins, globals, quickfn)
+  builtinFunction(cfg, globals, quickfn)
+  builtinBoolean(cfg, globals, quickfn)
+  builtinObject(cfg, globals, quickfn)
+  builtinNumber(cfg, globals, quickfn)
+  builtinRegExp(cfg, globals, quickfn)
+  builtinString(cfg, globals, quickfn)
+  builtinSymbol(cfg, globals, quickfn)
+  builtinError(cfg, globals, quickfn)
+  builtinArray(cfg, globals, quickfn)
+  builtinMath(cfg, globals, quickfn)
 
   var xs = 
 [ 'encodeURIComponent',
@@ -33825,7 +34358,7 @@ function makeRuntime(builtins, globals) {
   'encodeURI' ]
 
   var JSON = new ObjectValue(
-      builtins,
+      cfg,
       hidden.initial.EMPTY,
       builtins.getprop('[[ObjectProto]]').value()
   )
@@ -33837,7 +34370,7 @@ function makeRuntime(builtins, globals) {
 
   function quickfn(name, impl, into, instanceHCID) {
     var fn = new FunctionValue(
-      builtins,
+      cfg,
       {},
       functionProto,
       name,
@@ -33868,10 +34401,9 @@ var ObjectValue = require('../lib/values/object.js')
 var Value = require('../lib/values/value.js')
 var Operation = require('../operation.js')
 
-function makeMath(builtins, globals, quickFn) {
-  var objectProto = builtins.getprop('[[ObjectProto]]').value()
-  var MathObject = new ObjectValue(builtins, hidden.initial.EMPTY, objectProto)
-  MathObject.newprop('E').assign(new Value(builtins, 'number'))
+function makeMath(cfg, globals, quickFn) {
+  var objectProto = cfg._builtins.getprop('[[ObjectProto]]').value()
+  var MathObject = cfg.makeObject(null, objectProto)
   globals.newprop('Math').assign(MathObject)
   var numberProps = [
     'E',
@@ -33884,7 +34416,7 @@ function makeMath(builtins, globals, quickFn) {
     'SQRT2'
   ]
   numberProps.forEach(function(xs) {
-    MathObject.newprop(xs).assign(new Value(builtins, 'number'))
+    MathObject.newprop(xs).assign(cfg.makeValue('number'))
   })
 
   var mathFunctions = [
@@ -33918,7 +34450,7 @@ function MathFunctionImpl(name) {
 
   function MathFunctionImpl(cfg, thisValue, args, isNew) {
     cfg._connect(cfg.last(), new Operation(Operation.kind['MATH_' + name.toUpperCase()], args[0], args[1], args[2]))
-    cfg._valueStack.push(new Value(cfg._builtins, 'number'))
+    cfg._valueStack.push(cfg.makeValue('number'))
   }
 }
 
@@ -33928,8 +34460,8 @@ module.exports = makeNumber
 
 var Value = require('../lib/values/value.js')
 
-function makeNumber(builtins, globals, quickFn) {
-  var numberProto = builtins.getprop('[[NumberProto]]').value()
+function makeNumber(cfg, globals, quickFn) {
+  var numberProto = cfg._builtins.getprop('[[NumberProto]]').value()
   var numberCons = quickFn('Number', NumberImpl, globals)
 
   quickFn('parseFloat', ParseFloatImpl, globals)
@@ -33937,37 +34469,33 @@ function makeNumber(builtins, globals, quickFn) {
   quickFn('isFinite', IsFinite, globals)
   quickFn('isNaN', IsNaN, globals)
 
-  globals.newprop('Infinity').assign(new Value(
-    builtins,
-    'number',
-    Infinity
-  ))
-  globals.newprop('NaN').assign(new Value(
-    builtins,
-    'number',
-    NaN
-  ))
+  globals.newprop('Infinity').assign(
+    cfg.makeValue('number', Infinity)
+  )
+  globals.newprop('NaN').assign(
+    cfg.makeValue('number', NaN)
+  )
   numberCons.getprop('prototype').assign(numberProto)
 }
 
 function NumberImpl(cfg, thisValue, args, isNew) {
-  cfg._valueStack.push(new Value(cfg._builtins, 'number'))
+  cfg._valueStack.push(cfg.makeValue('number'))
 }
 
 function ParseFloatImpl(cfg, thisValue, args, isNew) {
-  cfg._valueStack.push(new Value(cfg._builtins, 'number'))
+  cfg._valueStack.push(cfg.makeValue('number'))
 }
 
 function ParseIntImpl(cfg, thisValue, args, isNew) {
-  cfg._valueStack.push(new Value(cfg._builtins, 'number'))
+  cfg._valueStack.push(cfg.makeValue('number'))
 }
 
 function IsFinite(cfg, thisValue, args, isNew) {
-  cfg._valueStack.push(new Value(cfg._builtins, 'boolean'))
+  cfg._valueStack.push(cfg.makeValue('boolean'))
 }
 
 function IsNaN(cfg, thisValue, args, isNew) {
-  cfg._valueStack.push(new Value(cfg._builtins, 'boolean'))
+  cfg._valueStack.push(cfg.makeValue('boolean'))
 }
 
 },{"../lib/values/value.js":109}],154:[function(require,module,exports){
@@ -33978,7 +34506,8 @@ var FunctionValue = require('../lib/values/function.js')
 var hidden = require('../lib/values/hidden-class.js')
 var ObjectValue = require('../lib/values/object.js')
 
-function makeObject(builtins, globals, quickFn) {
+function makeObject(cfg, globals, quickFn) {
+  var builtins = cfg._builtins
   var functionProto = builtins.getprop('[[FunctionProto]]').value()
   var objectProto = builtins.getprop('[[ObjectProto]]').value()
   var toStringAST = {"type":"FunctionDeclaration","id":{"type":"Identifier","name":"toString"},"params":[],"defaults":[],"body":{"type":"BlockStatement","body":[{"type":"ReturnStatement","argument":{"type":"BinaryExpression","operator":"+","left":{"type":"BinaryExpression","operator":"+","left":{"type":"Literal","value":"[object ","raw":"\'[object \'"},"right":{"type":"MemberExpression","computed":false,"object":{"type":"MemberExpression","computed":false,"object":{"type":"ThisExpression"},"property":{"type":"Identifier","name":"constructor"}},"property":{"type":"Identifier","name":"name"}}},"right":{"type":"Literal","value":"]","raw":"\']\'"}}}]},"rest":null,"generator":false,"expression":false}
@@ -33987,7 +34516,7 @@ function makeObject(builtins, globals, quickFn) {
   var objectCons = quickFn('Object', ObjectImpl, globals)
 
   var toString = new FunctionValue(
-    builtins,
+    cfg,
     toStringAST,
     functionProto,
     'toString',
@@ -34003,13 +34532,13 @@ function makeObject(builtins, globals, quickFn) {
 function ObjectImpl(cfg, thisValue, args, isNew) {
   // TODO: make this more accurate!
   cfg._valueStack.push(
-    new ObjectValue(cfg._builtins, hidden.initial.EMPTY, cfg._builtins.getprop('[[ObjectProto]]').value())
+    cfg.makeObject()
   )
 }
 
 function ObjectCreateImpl(cfg, thisValue, args, isNew) {
   cfg._valueStack.push(
-    new ObjectValue(cfg._builtins, hidden.initial.EMPTY, args[0] || cfg.makeUnknown())
+    cfg.makeObject(null, args[0] || cfg.makeUnknown())
   )
 }
 
@@ -34021,8 +34550,8 @@ var SharedFunctionInfo = require('../lib/values/shared-function-info.js')
 var hidden = require('../lib/values/hidden-class.js')
 var ObjectValue = require('../lib/values/object.js')
 
-function makeRegExp(builtins, globals, quickFn) {
-  var regexpProto = builtins.getprop('[[RegExpProto]]').value()
+function makeRegExp(cfg, globals, quickFn) {
+  var regexpProto = cfg._builtins.getprop('[[RegExpProto]]').value()
   var regexpCons = quickFn('RegExp', RegExpImpl, globals, hidden.initial.REGEXP)
 
   regexpCons.getprop('prototype').assign(regexpProto)
@@ -34045,8 +34574,8 @@ var Either = require('../lib/values/either.js')
 var Null = require('../lib/values/null.js')
 var CallImpl = require('./function.js').callImpl
 
-function makeString(builtins, globals, quickFn) {
-  var stringProto = builtins.getprop('[[StringProto]]').value()
+function makeString(cfg, globals, quickFn) {
+  var stringProto = cfg._builtins.getprop('[[StringProto]]').value()
   var stringCons = quickFn('String', StringImpl, globals, hidden.initial.STRING)
 
   stringCons.getprop('prototype').assign(stringProto)
@@ -34153,7 +34682,7 @@ function ReturnArrayOrNull(cfg, thisValue, args, isNew) {
   value.newprop('index').assign(cfg.makeValue('number'))
   value.newprop('input').assign(cfg.makeValue('string'))
 
-  var values = Either.from([value, new Null(cfg._builtins)])
+  var values = Either.from(cfg, [value, cfg.makeNull()])
   cfg._valueStack.push(values)
 }
 
@@ -34184,8 +34713,8 @@ var hidden = require('../lib/values/hidden-class.js')
 var ObjectValue = require('../lib/values/object.js')
 var Value = require('../lib/values/value.js')
 
-function makeSymbol(builtins, globals, quickFn) {
-  var symbolProto = builtins.getprop('[[SymbolProto]]').value()
+function makeSymbol(cfg, globals, quickFn) {
+  var symbolProto = cfg._builtins.getprop('[[SymbolProto]]').value()
   var symbolCons = quickFn('Symbol', SymbolProto, globals, hidden.initial.SYMBOL)
 
   symbolCons.getprop('prototype').assign(symbolProto)
@@ -34204,18 +34733,15 @@ function SymbolProto(cfg, thisValue, args, isNew) {
 
 module.exports = ScopeStack
 
-var Membrane = require('./lib/values/membrane.js')
-var Scope = require('./lib/values/scope.js')
-
-function ScopeStack(root, builtins) {
+function ScopeStack(cfg, root) {
   if(!(this instanceof ScopeStack)) {
-    return new ScopeStack(root, builtins)
+    return new ScopeStack(cfg, root)
   }
 
+  this.cfg = cfg
   this._membraneMap = new Map()
-  this._root = new Scope(builtins, root, 'Program')
+  this._root = root
   this._current = root
-  this._builtins = builtins
 }
 
 var proto = ScopeStack.prototype
@@ -34225,7 +34751,7 @@ proto.current = function() {
 }
 
 proto.push = function(block) {
-  this._current = new Scope(this._builtins, this._current, block.type)
+  this._current = this.cfg.makeScope(block.type, this._current || null)
 }
 
 proto.set = function(scope) {
@@ -34233,7 +34759,7 @@ proto.set = function(scope) {
 }
 
 proto.pushBranch = function(branchID) {
-  this._current = new Membrane(this._current)
+  this._current = this.cfg.makeMembrane(this._current)
   this._membraneMap.set(branchID, this._current)
 }
 
@@ -34297,7 +34823,7 @@ proto.getprop = function(str, immediate) {
   return this._current.getprop(str, immediate)
 }
 
-},{"./lib/values/membrane.js":99,"./lib/values/scope.js":104}],159:[function(require,module,exports){
+},{}],159:[function(require,module,exports){
 'use strict'
 
 module.exports = simplify
@@ -34415,33 +34941,28 @@ var hidden = require('./lib/values/hidden-class.js')
 var ObjectValue = require('./lib/values/object.js')
 var Value = require('./lib/values/value.js')
 
-function ValueStack(builtins, onvalue, onpopvalue) {
+function ValueStack(cfg) {
   if (!(this instanceof ValueStack)) {
-    return new ValueStack(builtins, onvalue, onpopvalue)
+    return new ValueStack(cfg)
   }
 
   this._values = []
   this._fence = {at: -1}
   this._fence.prev = this._fence
-  this._builtins = builtins
-  this._onvalue = onvalue || noop
-  this._onpopvalue = onpopvalue || noop
+  this._cfg = cfg
 }
 
 var cons = ValueStack
 var proto = cons.prototype
 
-function noop() {
-}
-
 proto.push = function (value) {
   this._values.push(value)
-  this._onvalue(value)
+  this._cfg.onpushvalue(value)
 }
 
 proto.pushHole = function() {
   this._values.push(null)
-  this._onvalue(null)
+  this._cfg.onpushvalue(null)
 }
 
 proto.pop = function () {
@@ -34450,7 +34971,7 @@ proto.pop = function () {
   }
 
   var output = this._values.pop()
-  this._onpopvalue(output)
+  this._cfg.onpopvalue(output)
   return output
 }
 
@@ -34468,14 +34989,18 @@ proto.unfence = function() {
 }
 
 proto.toArray = function(len) {
-  var objectValue = this._builtins.getprop('[[ArrayConstructor]]').value().makeNew()
-
-  objectValue.newprop('length').assign(new Value(this._builtins, 'number', len))
-  objectValue._static = true
+  var objectValue = this._cfg.makeArray(len)
 
   if (len) {
     var values = this._values.slice(-len)
     this._values.length -= len
+    for (var i = values.length - 1; i > -1; --i) {
+      this._cfg.onpopvalue(values[i])
+    }
+
+    if (values.length < len) {
+      throw new Error('not enough values')
+    }
 
     if (this._values.length < this._fence.at) {
       throw new Error('crossed fence!')
@@ -34490,14 +35015,17 @@ proto.toArray = function(len) {
     }
   }
 
-  this._values.push(objectValue)
+  this.push(objectValue)
 }
 
 proto.toObject = function(len) {
-  var objectValue = new ObjectValue(this._builtins, hidden.initial.EMPTY, this._builtins.newprop('[[ObjectProto]]').value())
+  var objectValue = this._cfg.makeObject()
 
   if (len) {
     var values = len ? this._values.slice(len * -2) : []
+    for (var i = values.length - 1; i > -1; --i) {
+      this._cfg.onpopvalue(values[i])
+    }
     this._values.length -= len * 2
 
     if (this._values.length < this._fence.at) {
@@ -34509,7 +35037,7 @@ proto.toObject = function(len) {
     }
   }
 
-  this._values.push(objectValue)
+  this.push(objectValue)
 }
 
 },{"./lib/values/hidden-class.js":98,"./lib/values/object.js":103,"./lib/values/value.js":109}],161:[function(require,module,exports){
